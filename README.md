@@ -1,15 +1,16 @@
 # LUCiO: Lucia Unified Control Interface for OctAVEs
 
-**LUCiO** is an offline sourcecode-generation interface for creating Lucia/RX1-compatible `.lscf` files. It provides two complementary workflows:
+**LUCiO** is an offline sourcecode-generation interface for creating Lucia/RX1-compatible `.lscf` files. It provides three complementary workflows:
 
 ```text
-LUCiO-Audio      audio-driven sourcecode generation
-LUCiO-Composer   typed/manual sourcecode composition
+LUCiO-Audio          audio-driven sourcecode generation
+LUCiO-Composer       typed/manual sourcecode composition
+LUCiO-Composer-SUN   typed/manual composition with halogen/wash-light control
 ```
 
-Both modes generate row-based Lucia sourcecodes in which oscillator frequency, luminance, and duty cycle are written into Lucia-compatible `.lscf` files.
+All modes generate row-based Lucia sourcecodes in which stimulation parameters are written into Lucia-compatible `.lscf` files.
 
-LUCiO-Audio derives stimulation parameters from an uploaded audio file. LUCiO-Composer does not use audio; instead, users define a timed sequence directly by specifying duration, frequency, luminance, and duty-cycle values for OSC1–OSC4.
+LUCiO-Audio derives stimulation parameters from an uploaded audio file. LUCiO-Composer and LUCiO-Composer-SUN do not use audio; instead, users define a timed sequence directly by specifying duration, oscillator frequency, luminance, duty cycle, and optionally halogen/wash-light intensity.
 
 The current validated implementation uses a **dynamic-duty, header-preserving export mode**. This means that a GUI-authored Lucia sourcecode file is used as a validated binary template, while the sourcecode rows are programmatically replaced with newly generated stimulation parameters.
 
@@ -123,9 +124,63 @@ plots/<sequence_name>_lucio_composer_plot.png
 plots/<sequence_name>_lucio_composer_plot.pdf
 ```
 
+### LUCiO-Composer-SUN
+
+LUCiO-Composer-SUN extends LUCiO-Composer with typed halogen/wash-light control. Users can specify a `halogen` value for each authored step, either as a fixed scalar or as a `[start, end]` ramp.
+
+Example halogen-only wash-light ramp:
+
+```python
+{
+    "label": "halogen_only_rise",
+    "duration": 10,
+    "halogen": sun([0, 40]),
+    "osc1": off(),
+    "osc2": off(),
+    "osc3": off(),
+    "osc4": off(),
+}
+```
+
+Example combined oscillator and halogen step:
+
+```python
+{
+    "label": "soft_wash_plus_alpha",
+    "duration": 20,
+    "halogen": sun(35),
+    "osc1": osc(freq=10, lum=20, duty=50),
+    "osc2": osc(freq=10, lum=20, duty=50),
+    "osc3": osc(freq=60, lum=5, duty=50),
+    "osc4": osc(freq=60, lum=5, duty=50),
+}
+```
+
+As with oscillator ramps, halogen ramps are expanded into discrete Lucia rows before export. Lucia receives one halogen/wash-light value per sourcecode row.
+
+For each SUN sequence, LUCiO-Composer-SUN exports:
+
+```text
+user/sourcecodes/d_<sequence_name>_various.lscf
+debug/<sequence_name>_lucio_sun_debug.csv
+plots/<sequence_name>_lucio_sun_plot.png
+plots/<sequence_name>_lucio_sun_plot.pdf
+```
+
+The SUN branch uses empirically identified halogen row-control bytes from GUI-authored comparison files:
+
+```text
+halogen off: row[40:44] = 00 01 00 14
+halogen on:  row[40:44] = 01 01 01 H
+```
+
+where `H` is the halogen intensity byte, treated as a 0–100 value.
+
+LUCiO-Composer-SUN has been validated for GUI visibility, loading/playback, halogen ramping, combined halogen-plus-oscillator sequences, and resaving through Lucia as a standard session/session configuration.
+
 ## Control Architecture
 
-LUCiO generates Lucia sourcecode rows rather than streaming real-time framewise stimulation. Each row defines the target state for the oscillators over a fixed control window.
+LUCiO generates Lucia sourcecode rows rather than streaming real-time framewise stimulation. Each row defines the target state for the oscillators, and optionally the halogen/wash-light channel, over a fixed control window.
 
 The current validated settings are:
 
@@ -133,27 +188,30 @@ The current validated settings are:
 Control step:              1.0 s
 Parameter update rate:     1 Hz
 Lucia row duration byte:   10 tenths = 1.0 s
-Halogen:                   off / not yet implemented
+Oscillator frequency:      0–60 Hz
+Oscillator duty range:     10–90
+Oscillator luminance:      0–100
+Halogen/SUN range:         0–100
 ```
 
 The important distinction is that **1 Hz refers to the parameter update rate**, not the flicker frequency. Within each 1-s row, Lucia generates flicker at the encoded oscillator frequency. The current sourcecode format therefore supports row-based parameter control rather than high-rate framewise modulation.
 
-In LUCiO-Composer, longer authored steps are expanded into multiple 1-s sourcecode rows. For example, a 30-s ramp becomes 30 discrete Lucia rows.
+In LUCiO-Composer and LUCiO-Composer-SUN, longer authored steps are expanded into multiple 1-s sourcecode rows. For example, a 30-s ramp becomes 30 discrete Lucia rows.
 
 ## Audio-to-Strobe Mapping
 
 For each 1-s audio window, LUCiO-Audio extracts:
 
-1. **Dominant Spectral Frequency**
+1. **Dominant spectral frequency**
    The dominant audio frequency is estimated within a configurable spectral band and folded by octave into the validated SLS stimulation range.
 
-2. **SLS Oscillator Frequency**
+2. **SLS oscillator frequency**
    The folded SLS frequency is converted into Lucia oscillator cycle units. In the currently validated row grammar, frequency is represented as an integer number of cycles relative to a 2.5-s main-cycle representation, giving an approximate frequency resolution of 0.4 Hz.
 
 3. **Luminance**
    Window-level RMS amplitude is normalized across the track and mapped to a bounded Lucia luminance range.
 
-4. **Duty Cycle**
+4. **Duty cycle**
    Duty cycle is dynamically estimated from the within-window audio amplitude envelope. The default method is envelope occupancy: the proportion of the normalized 1-s envelope above a fixed threshold. This produces lower duty values for sparse/transient audio and higher duty values for sustained/dense audio.
 
 The current default LUCiO-Audio mappings are:
@@ -191,10 +249,52 @@ Duty cycle range:          10–90
 
 A luminance value of 0 is used for dark/off states. The current validated exporter keeps oscillator blocks structurally active and uses luminance to determine whether visible output is present.
 
+## SUN / Halogen Mapping
+
+LUCiO-Composer-SUN adds a typed `halogen` parameter to the Composer sequence format.
+
+A SUN value can be fixed:
+
+```python
+"halogen": sun(35)
+```
+
+or ramped:
+
+```python
+"halogen": sun([0, 70])
+```
+
+The halogen/SUN value is clipped to:
+
+```text
+Halogen range:             0–100
+```
+
+A value of 0 writes the empirically identified halogen-off row-control pattern:
+
+```text
+row[40:44] = 00 01 00 14
+```
+
+A value greater than 0 writes the empirically identified halogen-on row-control pattern:
+
+```text
+row[40:44] = 01 01 01 H
+```
+
+where `H` is the halogen intensity value.
+
+The SUN branch is intended for warm wash-light, ramp-up, ramp-down, dark-reset, and halogen-plus-flicker sequence design.
+
 ## Recommended Workflow
 
 1. Open the LUCiO Colab notebook.
-2. Choose either LUCiO-Audio or LUCiO-Composer.
+2. Choose one of:
+
+   * LUCiO-Audio
+   * LUCiO-Composer
+   * LUCiO-Composer-SUN
 3. Upload the validated dynamic-duty template:
 
 ```text
@@ -203,22 +303,23 @@ d_spcwkdc1020904022_various.lscf
 
 4. For LUCiO-Audio, upload one or more audio files.
 5. For LUCiO-Composer, edit the `SEQUENCE_NAME` and `STEPS` section.
-6. Run the notebook to generate `.lscf`, debug CSV, and sequence plot outputs.
-7. Download the generated ZIP.
-8. Copy one generated `.lscf` file at a time into:
+6. For LUCiO-Composer-SUN, edit the `SEQUENCE_NAME`, `STEPS`, and any `halogen` / `sun(...)` values.
+7. Run the notebook to generate `.lscf`, debug CSV, and sequence plot outputs.
+8. Download the generated ZIP.
+9. Copy one generated `.lscf` file at a time into:
 
 ```text
 USB Lucia/user/sourcecodes/
 ```
 
-9. In Lucia, load:
+10. In Lucia, load:
 
 ```text
 Session editor → D → various → spcwkdc1020904022
 ```
 
-10. Verify playback.
-11. Save/resave the loaded sourcecode as a normal Lucia session or session configuration using the desired final name.
+11. Verify playback.
+12. Save/resave the loaded sourcecode as a normal Lucia session or session configuration using the desired final name.
 
 ## Current Validation Status
 
@@ -239,12 +340,24 @@ Playable in Lucia session editor
 Resavable as a standard Lucia session/session configuration
 ```
 
+Validated in LUCiO-Composer-SUN:
+
+```text
+Typed halogen/wash-light values
+Fixed halogen levels
+Halogen ramp expansion
+Combined halogen + OSC1–OSC4 scripted sequences
+Halogen debug CSV output
+Halogen sequence plot output
+Viewable/playable generated SUN sourcecodes
+Resavable SUN sessions/session configurations
+```
+
 Current limitations:
 
 ```text
 Generated files initially inherit the template’s internal Lucia display name
 Only one generated sourcecode should be copied/tested at a time
-Halogen/wash-light mapping is not yet implemented
 Control updates are row-based at 1 Hz, not framewise or streamed
 Composer ramps are pre-expanded into discrete rows
 Lucia rows store target states, not native start/end ramp values
@@ -255,9 +368,9 @@ Planned extensions:
 
 ```text
 LUCiO v0.2: dynamic-duty-compatible internal-name/header rewriting
-LUCiO-H: halogen/wash-light layer
 LUCiO-M: multi-band or multi-feature audio mappings
 LUCiO-Composer extensions: reusable sequence libraries and named presets
+LUCiO-SUN extensions: richer wash-light templates and intensity presets
 ```
 
 ## Methods
@@ -266,7 +379,11 @@ LUCiO implements an offline sourcecode-generation interface for Lucia/RX1-compat
 
 In LUCiO-Audio, audio files are segmented into 1-s windows, and each window is converted into a Lucia sourcecode row specifying oscillator frequency, luminance, and duty cycle. Dominant audio frequencies are folded by octave into the SLS stimulation range and encoded as Lucia oscillator cycle counts. Window-level RMS amplitude is mapped to luminance, while duty cycle is estimated from amplitude-envelope occupancy within each window.
 
-In LUCiO-Composer, users define a timed sequence directly. Each authored step specifies fixed or ramped frequency, luminance, and duty-cycle values for OSC1–OSC4. Ramps are expanded into one discrete Lucia row per control step before export. Generated files are viewable and playable in Lucia and can be resaved through the GUI as standard session/session configuration files.
+In LUCiO-Composer, users define a timed sequence directly. Each authored step specifies fixed or ramped frequency, luminance, and duty-cycle values for OSC1–OSC4. Ramps are expanded into one discrete Lucia row per control step before export.
+
+In LUCiO-Composer-SUN, users may additionally specify a halogen/wash-light value per authored step. Halogen values may be fixed or ramped and are expanded into one discrete Lucia row per control step. The SUN implementation uses empirically identified row-control bytes for halogen-off and halogen-on states.
+
+Generated files are viewable and playable in Lucia and can be resaved through the GUI as standard session/session configuration files.
 
 ## Technical Notes
 
@@ -280,7 +397,7 @@ Checksum:   final 1-byte XOR checksum
 
 The final byte is recomputed as the XOR of all preceding bytes. In the current dynamic-duty mode, the header is preserved exactly from the validated GUI-authored template, and only the row sequence plus final XOR checksum are regenerated.
 
-Each 56-byte row contains four oscillator blocks, global oscillator luminance/activation fields, timing/control bytes, and loop information.
+Each 56-byte row contains four oscillator blocks, global oscillator luminance/activation fields, timing/control bytes, loop information, and row-control bytes used for halogen/wash-light behaviour.
 
 Duty-cycle bytes are written directly as decimal percentage values in the valid Lucia GUI range of 10–90. For all-four-oscillator rows, these are located at row-relative offsets:
 
@@ -300,6 +417,15 @@ loops:        1
 ```
 
 Frequency is encoded as an integer cycle count relative to the row’s main-cycle representation. In the currently validated template, this gives an approximate frequency resolution of 0.4 Hz.
+
+The SUN/halogen branch uses the following row-control patterns:
+
+```text
+halogen off: row[40:44] = 00 01 00 14
+halogen on:  row[40:44] = 01 01 01 H
+```
+
+where `H` is the halogen intensity value, currently treated as 0–100.
 
 ## Credit
 
