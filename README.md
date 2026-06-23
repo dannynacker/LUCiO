@@ -304,5 +304,3 @@ Frequency is encoded as an integer cycle count relative to the row’s main-cycl
 ## Credit
 
 LUCiO was developed as part of the octAVEs-to-stroboscopic-light workflow for generating Lucia/RX1-compatible sourcecodes from audio-derived and manually authored stimulation features. The current implementation is reverse-engineered and validated empirically through GUI loading/playback tests and should be treated as a practical compatibility layer rather than an official Lucia/RX1 specification.
-
-LUCiO was developed as part of the octAVEs-to-stroboscopic-light workflow for generating Lucia/RX1-compatible sourcecodes from audio-derived and manually authored stimulation features. The current implementation is reverse-engineered and validated empirically through GUI loading/playback tests and should be treated as a practical compatibility layer rather than an official Lucia/RX1 specification.
